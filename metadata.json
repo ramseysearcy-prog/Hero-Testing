@@ -1,0 +1,6 @@
+{
+  "name": "Hunter Forge",
+  "description": "Evil Hunter Tycoon video OCR gear and rune scanner, item stat comparator, and community min-maxing loadout optimizer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
