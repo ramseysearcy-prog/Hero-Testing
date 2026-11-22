@@ -101,7 +101,6 @@ fun HunterForgeApp(
     val selectedHero by viewModel.selectedHero.collectAsStateWithLifecycle()
     val optimizedLoadout by viewModel.optimizedLoadout.collectAsStateWithLifecycle()
     val rosterSummary by viewModel.rosterSummary.collectAsStateWithLifecycle()
-    val excludeOtherEquipped by viewModel.excludeOtherEquipped.collectAsStateWithLifecycle()
     val liveState by viewModel.liveMonitorState.collectAsStateWithLifecycle()
     val mediaScanState by viewModel.mediaScanState.collectAsStateWithLifecycle()
     val compareAId by viewModel.compareItemAId.collectAsStateWithLifecycle()
@@ -229,7 +228,6 @@ fun HunterForgeApp(
                     customBuilds = customBuilds,
                     optimizedLoadout = optimizedLoadout,
                     rosterSummary = rosterSummary,
-                    excludeOtherEquipped = excludeOtherEquipped,
                     vaultCount = vaultItems.size,
                     onSelectHero = viewModel::selectHero,
                     onSaveHero = viewModel::saveHero,
@@ -239,7 +237,6 @@ fun HunterForgeApp(
                     onDeleteBuild = viewModel::deleteCustomBuild,
                     onExportBuildCode = viewModel::exportBuildCode,
                     onDecodeBuildCode = viewModel::decodeBuildCode,
-                    onSetExcludeOtherEquipped = viewModel::setExcludeOtherEquipped,
                     onEquipLoadout = viewModel::equipRecommendedLoadout,
                     onUpdateAllHunters = viewModel::updateAllHuntersRoster
                 )

@@ -1,5 +1,6 @@
 package com.example.domain
 
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -47,13 +48,8 @@ data class CapProgress(
 data class SlotRecommendation(
     val slot: GearSlot,
     val bestItem: VaultItem?,
+    val currentItem: VaultItem?,
     val runnerUpItem: VaultItem?,
-    val rationale: String
-)
-
-data class RuneRecommendation(
-    val slotIndex: Int,
-    val rune: VaultItem,
     val rationale: String
 )
 
@@ -61,7 +57,6 @@ data class OptimizedLoadoutResult(
     val hero: HeroProfile,
     val assignedBuild: CustomBuild?,
     val slotRecommendations: List<SlotRecommendation>,
-    val runeRecommendations: List<RuneRecommendation>,
     val rawTotals: StatMap,
     val effectiveTotals: StatMap,
     val capProgressList: List<CapProgress>,
@@ -88,10 +83,8 @@ data class GearChangeAction(
     val buildName: String?,
     val slotLabel: String,
     val slot: GearSlot,
-    val isRune: Boolean,
     val currentItem: VaultItem?,
     val suggestedItem: VaultItem,
-    val previousOwnerHeroName: String?,
     val rationale: String,
     val statGainHighlights: List<String>
 )
@@ -214,7 +207,7 @@ object CommunityMinMaxEngine {
         val rows = StatType.entries.mapNotNull { type ->
             val a = itemA.stats.valueOf(type)
             val b = itemB.stats.valueOf(type)
-            if (a > 0.001f || b > 0.001f) {
+            if (abs(a) > 0.001f || abs(b) > 0.001f) {
                 StatDeltaRow(type, a, b, b - a)
             } else {
                 null
@@ -244,23 +237,22 @@ object CommunityMinMaxEngine {
     fun optimizeLoadout(
         hero: HeroProfile,
         allItems: List<VaultItem>,
-        ignoreItemsEquippedByOtherHeroes: Boolean,
         assignedBuild: CustomBuild? = null
     ): OptimizedLoadoutResult {
         val available = allItems.filter { item ->
-            !ignoreItemsEquippedByOtherHeroes ||
-                item.equippedHeroId == null ||
-                item.equippedHeroId == hero.id
+            item.kind == ItemKind.GEAR && (item.equippedHeroId == null || item.equippedHeroId == hero.id)
         }
+        val currentGear = available.filter { it.equippedHeroId == hero.id }.associateBy { it.slot }
 
         val weights = weightsForHero(hero, assignedBuild)
         val baseStats = heroBaseBuffStats(hero)
 
         val slotCandidates: Map<GearSlot, List<VaultItem>> = GearSlot.equipmentSlots.associateWith { slot ->
-            available
-                .filter { it.kind == ItemKind.GEAR && it.slot == slot }
-                .sortedByDescending { scoreStatMapMarginal(it.stats, weights) + it.tier.rank * 2.5 }
+            val drops = available
+                .filter { it.equippedHeroId == null && it.slot == slot }
+                .sortedByDescending { scoreStatMapMarginal(it.stats, weights) }
                 .take(4)
+            listOfNotNull(currentGear[slot]) + drops
         }
 
         data class BeamState(
@@ -282,10 +274,10 @@ object CommunityMinMaxEngine {
             if (candidates.isEmpty()) continue
             val nextStates = ArrayList<BeamState>(beam.size * candidates.size)
             for (state in beam) {
+                if (currentGear[slot] == null) nextStates.add(state)
                 for (candidate in candidates) {
                     val combined = state.accumulatedStats + candidate.stats
-                    val tierBonus = candidate.tier.rank * 2.0 + candidate.enhancementLevel * 0.4
-                    val totalScore = scoreCappedStats(combined, hero, assignedBuild, weights) + tierBonus
+                    val totalScore = scoreCappedStats(combined, hero, assignedBuild, weights)
                     nextStates.add(
                         BeamState(
                             chosen = state.chosen + (slot to candidate),
@@ -298,31 +290,18 @@ object CommunityMinMaxEngine {
             beam = nextStates.sortedByDescending { it.score }.take(32)
         }
 
+        val currentStats = currentGear.values.fold(baseStats) { total, item -> total + item.stats }
+        val currentScore = scoreCappedStats(currentStats, hero, assignedBuild, weights)
         val bestGearState = beam.first()
-        var currentStats = bestGearState.accumulatedStats
-
-        val runePool = available.filter { it.kind == ItemKind.RUNE }.toMutableList()
-        val chosenRunes = mutableListOf<RuneRecommendation>()
-        val maxRunes = hero.runeSlots.coerceIn(1, 5)
-
-        for (slotIdx in 1..maxRunes) {
-            if (runePool.isEmpty()) break
-            val beforeScore = scoreCappedStats(currentStats, hero, assignedBuild, weights)
-            val bestRune = runePool.maxByOrNull { rune ->
-                scoreCappedStats(currentStats + rune.stats, hero, assignedBuild, weights) - beforeScore + rune.tier.rank * 1.5
-            } ?: break
-
-            val delta = scoreCappedStats(currentStats + bestRune.stats, hero, assignedBuild, weights) - beforeScore
-            if (delta <= 0.1 && chosenRunes.isNotEmpty()) break
-
-            val rationale = buildRuneRationale(bestRune, currentStats, hero, assignedBuild)
-            chosenRunes.add(RuneRecommendation(slotIdx, bestRune, rationale))
-            currentStats += bestRune.stats
-            runePool.remove(bestRune)
+        val chosenState = if (bestGearState.score > currentScore) {
+            bestGearState
+        } else {
+            BeamState(currentGear, currentStats, currentScore)
         }
+        val chosenStats = chosenState.accumulatedStats
 
         val slotRecommendations = GearSlot.equipmentSlots.map { slot ->
-            val chosen = bestGearState.chosen[slot]
+            val chosen = chosenState.chosen[slot]
             val candidates = slotCandidates[slot].orEmpty()
             val runnerUp = candidates.firstOrNull { it.id != chosen?.id }
             val rationale = if (chosen == null) {
@@ -330,152 +309,75 @@ object CommunityMinMaxEngine {
             } else {
                 buildSlotRationale(chosen, hero, assignedBuild)
             }
-            SlotRecommendation(slot, chosen, runnerUp, rationale)
+            SlotRecommendation(slot, chosen, currentGear[slot], runnerUp, rationale)
         }
 
-        val effective = applyCaps(currentStats, assignedBuild)
-        val caps = buildCapProgress(currentStats, effective)
-        val buildRangeProgress = buildCustomRangeProgress(currentStats, assignedBuild)
-        val warnings = buildOvercapWarnings(currentStats, hero, assignedBuild)
-        val notes = buildCommunityNotes(hero, assignedBuild, currentStats, chosenRunes.size)
-        val finalScore = scoreCappedStats(currentStats, hero, assignedBuild, weights)
+        val effective = applyCaps(chosenStats, assignedBuild)
+        val caps = buildCapProgress(chosenStats, effective)
+        val buildRangeProgress = buildCustomRangeProgress(chosenStats, assignedBuild)
+        val warnings = buildOvercapWarnings(chosenStats, hero, assignedBuild)
+        val notes = buildCommunityNotes(hero, assignedBuild, chosenStats)
 
         return OptimizedLoadoutResult(
             hero = hero,
             assignedBuild = assignedBuild,
             slotRecommendations = slotRecommendations,
-            runeRecommendations = chosenRunes,
-            rawTotals = currentStats,
+            rawTotals = chosenStats,
             effectiveTotals = effective,
             capProgressList = caps,
             buildRangeProgressList = buildRangeProgress,
             overcapWarnings = warnings,
             communityNotes = notes,
-            combatScore = finalScore
+            combatScore = chosenState.score
         )
     }
 
-    /**
-     * Plans conflict-free gear and rune swaps across every hero in the roster at once,
-     * comparing each hero's currently equipped items against the optimal available allocation.
-     */
+    fun gearChangesFor(loadout: OptimizedLoadoutResult): List<GearChangeAction> {
+        val hero = loadout.hero
+        return loadout.slotRecommendations.mapNotNull { recommendation ->
+            val suggested = recommendation.bestItem ?: return@mapNotNull null
+            val current = recommendation.currentItem
+            if (suggested.id == current?.id) return@mapNotNull null
+
+            GearChangeAction(
+                id = "hero_${hero.id}_slot_${recommendation.slot.name}_${suggested.id}",
+                heroId = hero.id,
+                heroName = hero.name,
+                heroAdvancement = hero.advancement,
+                heroRole = hero.role,
+                buildName = loadout.assignedBuild?.name,
+                slotLabel = recommendation.slot.displayName,
+                slot = recommendation.slot,
+                currentItem = current,
+                suggestedItem = suggested,
+                rationale = recommendation.rationale,
+                statGainHighlights = computeStatDiffHighlights(current?.stats, suggested.stats)
+            )
+        }
+    }
+
+    /** Allocates available drops once, in roster order, without moving worn gear. */
     fun planAllHeroGearChanges(
         heroes: List<HeroProfile>,
         allItems: List<VaultItem>,
         buildsById: Map<Long, CustomBuild>
     ): RosterChangePlan {
-        if (heroes.isEmpty()) {
-            return RosterChangePlan(emptyList(), 0, 0)
-        }
-
-        val heroesById = heroes.associateBy { it.id }
-        val reservedItemIds = mutableSetOf<Long>()
-        val groups = mutableListOf<HeroChangeGroup>()
-
-        for (hero in heroes) {
-            val availableForHero = allItems.filter { it.id !in reservedItemIds }
-            val assignedBuild = hero.assignedBuildId?.let { buildsById[it] }
+        val reservedDropIds = mutableSetOf<Long>()
+        val groups = heroes.map { hero ->
+            val assignedBuild = hero.assignedBuildId?.let(buildsById::get)
             val optimized = optimizeLoadout(
                 hero = hero,
-                allItems = availableForHero,
-                ignoreItemsEquippedByOtherHeroes = false,
+                allItems = allItems.filter { it.id !in reservedDropIds },
                 assignedBuild = assignedBuild
             )
-
-            // Reserve all items & runes assigned to this hero so subsequent heroes won't double-claim them
-            optimized.slotRecommendations.forEach { rec ->
-                rec.bestItem?.let { reservedItemIds.add(it.id) }
-            }
-            optimized.runeRecommendations.forEach { runeRec ->
-                reservedItemIds.add(runeRec.rune.id)
-            }
-
-            val currentlyEquipped = allItems.filter { it.equippedHeroId == hero.id }
-            val currentGearBySlot = currentlyEquipped
-                .filter { it.kind == ItemKind.GEAR }
-                .associateBy { it.slot }
-
-            val actions = mutableListOf<GearChangeAction>()
-
-            // 1. Compare 8 equipment slots
-            for (rec in optimized.slotRecommendations) {
-                val suggested = rec.bestItem ?: continue
-                val current = currentGearBySlot[rec.slot]
-                if (suggested.id != current?.id) {
-                    val prevOwner = suggested.equippedHeroId
-                        ?.takeIf { it != hero.id }
-                        ?.let { heroesById[it]?.name }
-                    actions.add(
-                        GearChangeAction(
-                            id = "hero_${hero.id}_slot_${rec.slot.name}_${suggested.id}",
-                            heroId = hero.id,
-                            heroName = hero.name,
-                            heroAdvancement = hero.advancement,
-                            heroRole = hero.role,
-                            buildName = assignedBuild?.name,
-                            slotLabel = rec.slot.displayName,
-                            slot = rec.slot,
-                            isRune = false,
-                            currentItem = current,
-                            suggestedItem = suggested,
-                            previousOwnerHeroName = prevOwner,
-                            rationale = rec.rationale,
-                            statGainHighlights = computeStatDiffHighlights(current?.stats, suggested.stats)
-                        )
-                    )
-                }
-            }
-
-            // 2. Compare runes
-            val currentRunes = currentlyEquipped.filter { it.kind == ItemKind.RUNE }
-            val currentRuneIds = currentRunes.map { it.id }.toSet()
-            val suggestedRuneIds = optimized.runeRecommendations.map { it.rune.id }.toSet()
-            val unusedCurrentRunes = currentRunes.filter { it.id !in suggestedRuneIds }.toMutableList()
-
-            for (runeRec in optimized.runeRecommendations) {
-                val suggestedRune = runeRec.rune
-                if (suggestedRune.id !in currentRuneIds) {
-                    val replaced = unusedCurrentRunes.removeFirstOrNull()
-                    val prevOwner = suggestedRune.equippedHeroId
-                        ?.takeIf { it != hero.id }
-                        ?.let { heroesById[it]?.name }
-                    actions.add(
-                        GearChangeAction(
-                            id = "hero_${hero.id}_rune_${runeRec.slotIndex}_${suggestedRune.id}",
-                            heroId = hero.id,
-                            heroName = hero.name,
-                            heroAdvancement = hero.advancement,
-                            heroRole = hero.role,
-                            buildName = assignedBuild?.name,
-                            slotLabel = "Rune #${runeRec.slotIndex}",
-                            slot = GearSlot.RUNE,
-                            isRune = true,
-                            currentItem = replaced,
-                            suggestedItem = suggestedRune,
-                            previousOwnerHeroName = prevOwner,
-                            rationale = runeRec.rationale,
-                            statGainHighlights = computeStatDiffHighlights(replaced?.stats, suggestedRune.stats)
-                        )
-                    )
-                }
-            }
-
-            groups.add(
-                HeroChangeGroup(
-                    hero = hero,
-                    assignedBuild = assignedBuild,
-                    recommendedLoadout = optimized,
-                    changes = actions
-                )
-            )
+            val changes = gearChangesFor(optimized)
+            changes.forEach { reservedDropIds.add(it.suggestedItem.id) }
+            HeroChangeGroup(hero, assignedBuild, optimized, changes)
         }
-
-        val totalChanges = groups.sumOf { it.changes.size }
-        val heroesWithChanges = groups.count { it.changes.isNotEmpty() }
         return RosterChangePlan(
             heroGroups = groups,
-            totalChangesCount = totalChanges,
-            heroesNeedingChangesCount = heroesWithChanges
+            totalChangesCount = groups.sumOf { it.changes.size },
+            heroesNeedingChangesCount = groups.count { it.changes.isNotEmpty() }
         )
     }
 
@@ -485,7 +387,7 @@ object CommunityMinMaxEngine {
             val newVal = new.valueOf(type)
             val delta = newVal - oldVal
             val threshold = if (type.isFlatDecimal) 0.005f else 0.4f
-            if (kotlin.math.abs(delta) >= threshold) {
+            if (abs(delta) >= threshold) {
                 type to delta
             } else {
                 null
@@ -495,7 +397,7 @@ object CommunityMinMaxEngine {
             .sortedByDescending { (type, delta) ->
                 val scaled = if (type.isFlatDecimal) delta * 100f else delta
                 // Show biggest positive gains first, then major trade-offs
-                if (scaled > 0f) scaled + 1000f else kotlin.math.abs(scaled)
+                if (scaled > 0f) scaled + 1000f else abs(scaled)
             }
             .take(4)
             .map { (type, delta) -> "${type.shortLabel} ${type.formatDelta(delta)}" }
@@ -711,29 +613,6 @@ object CommunityMinMaxEngine {
         return parts.joinToString(" • ").replaceFirstChar { it.uppercase() }
     }
 
-    private fun buildRuneRationale(
-        rune: VaultItem,
-        preRuneStats: StatMap,
-        hero: HeroProfile,
-        build: CustomBuild?
-    ): String {
-        val s = rune.stats
-        val targetRace = build?.targetRace ?: hero.targetRace
-        return when {
-            s.atkSpd > 0f && preRuneStats.atkSpd < CAP_ASPD_BONUS ->
-                "Closes Attack Speed gap (${String.format(java.util.Locale.US, "%.2f", preRuneStats.atkSpd)} -> ${String.format(java.util.Locale.US, "%.2f", min(CAP_ASPD_BONUS, preRuneStats.atkSpd + s.atkSpd))})"
-            s.critChance > 0f && preRuneStats.critChance < CAP_CRIT_CHANCE ->
-                "Pushes Crit Chance closer to 50% cap"
-            s.evasion > 0f && preRuneStats.evasion < CAP_EVASION ->
-                "Improves survival toward 40% Evasion cap"
-            s.critDmg >= 15f ->
-                "Pure Crit DMG multiplier after hitting speed/crit targets"
-            targetRace.statType != null && s.valueOf(targetRace.statType) > 0f ->
-                "Amplifies ${targetRace.displayName} damage"
-            else -> "Best remaining stat utility for ${build?.name ?: hero.advancement.displayName}"
-        }
-    }
-
     private fun buildCapProgress(raw: StatMap, eff: StatMap): List<CapProgress> = listOf(
         CapProgress("Attack Speed", raw.atkSpd, eff.atkSpd, CAP_ASPD_BONUS, true, raw.atkSpd > CAP_ASPD_BONUS + 0.01f),
         CapProgress("Crit Chance", raw.critChance, eff.critChance, CAP_CRIT_CHANCE, false, raw.critChance > CAP_CRIT_CHANCE + 2f),
@@ -789,8 +668,7 @@ object CommunityMinMaxEngine {
     private fun buildCommunityNotes(
         hero: HeroProfile,
         build: CustomBuild?,
-        raw: StatMap,
-        runeCount: Int
+        raw: StatMap
     ): List<String> {
         val notes = mutableListOf<String>()
         if (build != null) {
@@ -798,9 +676,8 @@ object CommunityMinMaxEngine {
         }
         notes.add(hero.advancement.communityTip)
         notes.add("Trait (${hero.trait.displayName}) + Guild/Buff settings are factored into your cap math before gear selection.")
-        if (runeCount == 0) {
-            notes.add("No Runes in Vault yet — scan or log Runes to unlock joint gear + rune breakpoint filling!")
-        } else if (raw.atkSpd >= CAP_ASPD_BONUS) {
+        notes.add("Gear-only comparison. Runes are excluded.")
+        if (raw.atkSpd >= CAP_ASPD_BONUS) {
             notes.add("0.25 Attack Speed cap reached! Community rule: invest remaining slots into Crit DMG%, ATK%, and ${(build?.targetRace ?: hero.targetRace).displayName}.")
         }
         return notes

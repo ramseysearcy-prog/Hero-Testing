@@ -58,7 +58,7 @@ enum class StatType(
     EVASION("Evasion %", "EVA", false, 14f, 40f),
     DEF_PCT("Defense %", "DEF", false, 26f, 180f),
     HP_PCT("Max HP %", "HP", false, 26f, 180f),
-    DMG_REDUCTION("DMG Reduction %", "DMG RED", false, 17f, 75f),
+    DMG_REDUCTION("Chance to Reduce Damage by 25%", "REDUCE CHANCE", false, 17f, 75f),
     LIFESTEAL("Lifesteal %", "LIFESTEAL", false, 12f, 25f),
     BOSS_DMG("Boss DMG %", "BOSS", false, 40f, 260f),
     DEMON_DMG("Demon DMG %", "DEMON", false, 40f, 260f),
@@ -69,18 +69,7 @@ enum class StatType(
     SKILL_CAST("Skill Cast %", "CAST%", false, 12f, 50f),
     MOVE_SPD("Move Speed %", "MV SPD", false, 20f, 80f);
 
-    fun formatValue(value: Float): String {
-        return if (isFlatDecimal) {
-            String.format(java.util.Locale.US, "+%.2f", value)
-        } else {
-            val clean = if (abs(value - value.toInt()) < 0.05f) {
-                "${value.toInt()}%"
-            } else {
-                String.format(java.util.Locale.US, "%.1f%%", value)
-            }
-            "+$clean"
-        }
-    }
+    fun formatValue(value: Float): String = formatDelta(value)
 
     fun formatPlainValue(value: Float): String {
         return if (isFlatDecimal) {
@@ -191,7 +180,7 @@ data class StatMap(
     fun nonZeroEntries(): List<Pair<StatType, Float>> =
         StatType.entries.mapNotNull { type ->
             val v = valueOf(type)
-            if (v > 0.001f) type to v else null
+            if (abs(v) > 0.001f) type to v else null
         }
 
     fun signatureKey(): String =
