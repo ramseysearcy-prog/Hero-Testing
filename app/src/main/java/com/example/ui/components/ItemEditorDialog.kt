@@ -67,7 +67,7 @@ fun ItemEditorDialog(
         mutableStateOf(
             StatType.entries.associateWith { type ->
                 val v = initialItem?.stats?.valueOf(type) ?: 0f
-                if (v > 0.001f) {
+                if (kotlin.math.abs(v) > 0.001f) {
                     if (type.isFlatDecimal) String.format(java.util.Locale.US, "%.2f", v)
                     else v.toString().removeSuffix(".0")
                 } else ""
@@ -132,7 +132,7 @@ fun ItemEditorDialog(
                                 enhancementText = parsed.enhancementLevel.toString()
                                 statValues = StatType.entries.associateWith { type ->
                                     val v = parsed.stats.valueOf(type)
-                                    if (v > 0.001f) {
+                                    if (kotlin.math.abs(v) > 0.001f) {
                                         if (type.isFlatDecimal) String.format(java.util.Locale.US, "%.2f", v)
                                         else v.toString().removeSuffix(".0")
                                     } else ""
@@ -220,13 +220,15 @@ fun ItemEditorDialog(
                             OutlinedTextField(
                                 value = statValues[statType].orEmpty(),
                                 onValueChange = { input ->
-                                    val filtered = input.filter { it.isDigit() || it == '.' }
+                                    val filtered = input.replace('−', '-').filterIndexed { index, char ->
+                                        char.isDigit() || char == '.' || (index == 0 && char == '-')
+                                    }
                                     statValues = statValues + (statType to filtered)
                                 },
                                 label = { Text(statType.shortLabel) },
                                 placeholder = { Text(if (statType.isFlatDecimal) "0.12" else "18") },
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -248,7 +250,7 @@ fun ItemEditorDialog(
                             var map = StatMap()
                             StatType.entries.forEach { t ->
                                 val parsedVal = statValues[t]?.toFloatOrNull() ?: 0f
-                                if (parsedVal > 0f) {
+                                if (parsedVal.isFinite() && parsedVal != 0f) {
                                     map = map.withStat(t, parsedVal)
                                 }
                             }

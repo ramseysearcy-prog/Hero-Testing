@@ -121,7 +121,7 @@ fun GearChangesScreen(
                                 color = ForgeTextPrimary
                             )
                             Text(
-                                text = "Add your Evil Hunter Tycoon heroes in Optimize first. Once added, this tab shows every suggested gear & rune swap across all heroes in one place.",
+                                text = "Add your Evil Hunter Tycoon heroes in Optimize first. Once added, this tab shows every suggested gear swap across all heroes in one place.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ForgeTextSecondary
                             )
@@ -173,7 +173,7 @@ fun GearChangesScreen(
                                 color = ForgeTextPrimary
                             )
                             Text(
-                                text = "Scan or add gear and runes first so Hunter Forge can generate swap instructions for your ${plan.heroGroups.size} hero(es).",
+                                text = "Scan or add gear first so Hunter Forge can generate swap instructions for your ${plan.heroGroups.size} hero(es).",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ForgeTextSecondary
                             )
@@ -243,7 +243,7 @@ fun GearChangesScreen(
                                                 text = if (plan.totalChangesCount > 0) {
                                                     "${plan.totalChangesCount} suggested change(s) across ${plan.heroesNeedingChangesCount} hero(es)"
                                                 } else {
-                                                    "All ${plan.heroGroups.size} hunter(s) are already wearing their optimal gear!"
+                                                    "No gear upgrades suggested for this roster."
                                                 },
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = if (plan.totalChangesCount > 0) ArcaneCyan else ForgeEmerald
@@ -322,7 +322,7 @@ fun GearChangesScreen(
                                         color = ForgeEmerald
                                     )
                                     Text(
-                                        text = "Every hunter's equipped gear matches the latest min-max recommendation. Tap 'All Heroes' above to verify current loadouts, or scan new items in game.",
+                                        text = "Review the current loadouts under All Heroes, or scan new gear.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ForgeTextSecondary
                                     )
@@ -414,7 +414,7 @@ private fun HeroSwapGroupCard(
                 ) {
                     Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(16.dp), tint = ForgeEmerald)
                     Spacer(Modifier.width(6.dp))
-                    Text("Apply All ${group.changes.size} Swap(s) for ${group.hero.name}", color = ForgeEmerald)
+                    Text("Confirm ${group.changes.size} Equipped for ${group.hero.name}", color = ForgeEmerald)
                 }
 
                 HorizontalDivider(color = ForgeBorder.copy(alpha = 0.5f))
@@ -427,7 +427,7 @@ private fun HeroSwapGroupCard(
                 }
             } else {
                 Text(
-                    text = "All equipped gear and runes already match the best build (${res.combatScore.roundToInt()} pts).",
+                    text = "No gear upgrades suggested (${res.combatScore.roundToInt()} pts).",
                     style = MaterialTheme.typography.bodySmall,
                     color = ForgeEmerald
                 )
@@ -477,17 +477,15 @@ private fun SwapActionRow(
                         )
                     }
 
-                    val sourceLabel = change.previousOwnerHeroName?.let { "Take from $it" } ?: "From Bag / Vault"
-                    val sourceColor = if (change.previousOwnerHeroName != null) MoltenAmber else ForgeEmerald
-                    Surface(
+                                        Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = sourceColor.copy(alpha = 0.14f),
-                        border = BorderStroke(1.dp, sourceColor.copy(alpha = 0.5f))
+                        color = ForgeEmerald.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, ForgeEmerald.copy(alpha = 0.5f))
                     ) {
                         Text(
-                            text = sourceLabel,
+                            text = "From Bag / Vault",
                             style = MaterialTheme.typography.labelSmall,
-                            color = sourceColor,
+                            color = ForgeEmerald,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
@@ -508,7 +506,7 @@ private fun SwapActionRow(
                 ) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Done", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Equipped", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -520,7 +518,7 @@ private fun SwapActionRow(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "UNEQUIP",
+                        text = "REPLACED",
                         style = MaterialTheme.typography.labelSmall,
                         color = ForgeTextSecondary
                     )

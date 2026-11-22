@@ -3,7 +3,10 @@ package com.example.data
 import androidx.room.withTransaction
 import com.example.domain.CommunityMinMaxEngine
 import com.example.domain.CustomBuild
+import com.example.domain.GearChangeAction
+import com.example.domain.GearSlot
 import com.example.domain.HeroProfile
+import com.example.domain.ItemKind
 import com.example.domain.OptimizedLoadoutResult
 import com.example.domain.VaultItem
 import kotlinx.coroutines.flow.Flow
@@ -77,33 +80,33 @@ class ForgeRepository(private val db: AppDatabase) {
         }
     }
 
-    suspend fun equipLoadoutToHero(heroId: Long, itemIds: List<Long>) {
-        db.withTransaction {
-            vaultDao.unequipHeroItems(heroId)
-            if (itemIds.isNotEmpty()) {
-                vaultDao.equipItemsToHero(heroId, itemIds)
-            }
-        }
-    }
+    suspend fun applyGearChanges(changes: List<GearChangeAction>): Boolean = db.withTransaction {
+        val items = getAllItemsOnce()
+        val byId = items.associateBy { it.id }
+        val equippedBySlot = items
+            .filter { it.kind == ItemKind.GEAR && it.equippedHeroId != null }
+            .groupBy { checkNotNull(it.equippedHeroId) to it.slot }
+        val heroIds = getAllHeroesOnce().mapTo(mutableSetOf()) { it.id }
+        val targetSlots = mutableSetOf<Pair<Long, GearSlot>>()
+        val dropIds = mutableSetOf<Long>()
 
-    suspend fun applySingleGearChange(heroId: Long, newItemId: Long, replacedItemId: Long?) {
-        db.withTransaction {
-            if (replacedItemId != null) {
-                vaultDao.clearEquippedItemById(replacedItemId)
-            }
-            vaultDao.setItemEquippedHero(newItemId, heroId)
+        for (change in changes) {
+            val slot = change.heroId to change.slot
+            val drop = byId[change.suggestedItem.id]
+            val equipped = equippedBySlot[slot].orEmpty()
+            if (
+                change.heroId !in heroIds || !targetSlots.add(slot) ||
+                drop == null || drop != change.suggestedItem || drop.kind != ItemKind.GEAR ||
+                drop.slot != change.slot || drop.equippedHeroId != null || !dropIds.add(drop.id) ||
+                equipped != listOfNotNull(change.currentItem)
+            ) return@withTransaction false
         }
-    }
 
-    suspend fun applyAllRosterLoadouts(heroLoadouts: List<Pair<Long, List<Long>>>) {
-        db.withTransaction {
-            for ((heroId, itemIds) in heroLoadouts) {
-                vaultDao.unequipHeroItems(heroId)
-                if (itemIds.isNotEmpty()) {
-                    vaultDao.equipItemsToHero(heroId, itemIds)
-                }
-            }
+        for (change in changes) {
+            change.currentItem?.let { vaultDao.deleteItemById(it.id) }
+            vaultDao.setItemEquippedHero(change.suggestedItem.id, change.heroId)
         }
+        true
     }
 
     suspend fun runRosterOptimizationSummary(): List<OptimizedLoadoutResult> {

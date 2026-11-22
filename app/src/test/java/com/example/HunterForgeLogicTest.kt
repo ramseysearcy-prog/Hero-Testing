@@ -1,5 +1,8 @@
 package com.example
 
+import androidx.room.Room
+import com.example.data.AppDatabase
+import com.example.data.ForgeRepository
 import com.example.domain.BuildCodeCodec
 import com.example.domain.CommunityMinMaxEngine
 import com.example.domain.CustomBuild
@@ -17,12 +20,15 @@ import com.example.domain.StatTargetRange
 import com.example.domain.StatType
 import com.example.domain.TargetRace
 import com.example.domain.VaultItem
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -149,7 +155,6 @@ class HunterForgeLogicTest {
         val result = CommunityMinMaxEngine.optimizeLoadout(
             hero = hero,
             allItems = listOf(dpsArmor, tankArmor, runeCrit, runeTank),
-            ignoreItemsEquippedByOtherHeroes = false,
             assignedBuild = tankBuild
         )
 
@@ -160,61 +165,49 @@ class HunterForgeLogicTest {
     }
 
     @Test
-    fun `planAllHeroGearChanges avoids double-assigning items and detects swaps`() {
-        val hero1 = HeroProfile(
-            id = 1L,
-            name = "Kaelen",
-            baseClass = HeroBaseClass.BERSERKER,
-            advancement = HeroAdvancement.EXECUTIONER,
-            role = HeroRole.MAIN_CARRY,
-            runeSlots = 1
-        )
-        val hero2 = HeroProfile(
-            id = 2L,
-            name = "Aria",
-            baseClass = HeroBaseClass.RANGER,
-            advancement = HeroAdvancement.ARCANE_ARCHER,
-            role = HeroRole.BOSS_SHREDDER,
-            runeSlots = 1
-        )
+    fun `confirmed replacements remove only replaced gear and reject stale plans`() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val repository = ForgeRepository(db)
+            val heroDraft = HeroProfile(
+                name = "Hunter",
+                baseClass = HeroBaseClass.BERSERKER,
+                advancement = HeroAdvancement.EXECUTIONER
+            )
+            val hero = heroDraft.copy(id = repository.saveHero(heroDraft))
+            val oldDraft = VaultItem(
+                name = "Worn Axe",
+                kind = ItemKind.GEAR,
+                slot = GearSlot.WEAPON,
+                tier = GearTier.PRIMAL,
+                stats = StatMap(atkPct = 5f),
+                equippedHeroId = hero.id
+            )
+            val oldId = repository.saveItem(oldDraft)
+            val runeId = repository.saveItem(oldDraft.copy(
+                name = "Equipped Crit Rune",
+                kind = ItemKind.RUNE,
+                slot = GearSlot.RUNE,
+                stats = StatMap(critDmg = 20f)
+            ))
+            val dropId = repository.saveItem(oldDraft.copy(
+                name = "New Axe",
+                stats = StatMap(atkPct = 25f),
+                equippedHeroId = null
+            ))
+            val loadout = CommunityMinMaxEngine.optimizeLoadout(hero, repository.getAllItemsOnce())
+            val changes = CommunityMinMaxEngine.gearChangesFor(loadout)
 
-        val greatSword = VaultItem(
-            id = 101L,
-            name = "Chaos Destroyer",
-            kind = ItemKind.GEAR,
-            slot = GearSlot.WEAPON,
-            tier = GearTier.CHAOS,
-            stats = StatMap(atkPct = 25f, atkSpd = 0.12f, critDmg = 36f),
-            equippedHeroId = 2L // Currently worn by Aria, should tell Kaelen "Take from Aria"
-        )
-        val backupBow = VaultItem(
-            id = 102L,
-            name = "Primal Hunter Bow",
-            kind = ItemKind.GEAR,
-            slot = GearSlot.WEAPON,
-            tier = GearTier.PRIMAL,
-            stats = StatMap(atkPct = 20f, bossDmg = 34f, critChance = 10f),
-            equippedHeroId = null
-        )
-
-        val plan = CommunityMinMaxEngine.planAllHeroGearChanges(
-            heroes = listOf(hero1, hero2),
-            allItems = listOf(greatSword, backupBow),
-            buildsById = emptyMap()
-        )
-
-        assertEquals(2, plan.heroGroups.size)
-        val group1 = plan.heroGroups[0]
-        val group2 = plan.heroGroups[1]
-
-        // Kaelen gets Chaos Destroyer (taken from Aria), Aria gets Primal Hunter Bow
-        assertEquals(1, group1.changes.size)
-        assertEquals(greatSword.id, group1.changes[0].suggestedItem.id)
-        assertEquals("Aria", group1.changes[0].previousOwnerHeroName)
-
-        assertEquals(1, group2.changes.size)
-        assertEquals(backupBow.id, group2.changes[0].suggestedItem.id)
-        assertEquals(null, group2.changes[0].previousOwnerHeroName)
-        assertEquals(2, plan.totalChangesCount)
+            assertTrue(repository.applyGearChanges(changes))
+            assertFalse(repository.applyGearChanges(changes))
+            val items = repository.getAllItemsOnce().associateBy { it.id }
+            assertFalse(oldId in items)
+            assertEquals(hero.id, items.getValue(dropId).equippedHeroId)
+            assertEquals(hero.id, items.getValue(runeId).equippedHeroId)
+        } finally {
+            db.close()
+        }
     }
 }

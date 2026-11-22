@@ -36,8 +36,14 @@ object EhtOcrParser {
 
     private val enhancementRegex = Regex("""\+(\d{1,2})\b""")
 
-    private val numberPercentRegex = Regex("""([+-]?\d+(?:[.,]\d+)?)\s*%?""")
+    private val numberPercentRegex = Regex("""([+-]?\d+(?:[.,]\d+)?)\s*%""")
     private val decimalAspdRegex = Regex("""([+-]?0[.,]\d{1,3}|[+-]?\d+(?:[.,]\d+)?)\s*(?:sec|s)?""", RegexOption.IGNORE_CASE)
+
+    private val damageTakenChanceRegex = Regex(
+        """([+-]?\s*\d+(?:\.\d+)?)\s*%\s*(?:chance|probability)\s+(?:of\s+)?(?:decreas\w*|reduc\w*)\s+(?:the\s+)?(?:damage|dmg)\s+taken\s+(?:by\s+)?25\s*%""",
+        RegexOption.IGNORE_CASE
+    )
+    private val decreaseRegex = Regex("""\b(?:decreases?|decreased|reduces?|reduced|lowers?|penalty)\b""")
 
     fun parse(rawText: String): ParsedOcrItem? {
         if (rawText.isBlank()) return null
@@ -51,7 +57,7 @@ object EhtOcrParser {
 
         val fullLower = normalizedLines.joinToString("\n").lowercase()
 
-        val isRune = detectIsRune(normalizedLines, fullLower)
+        val isRune = detectIsRune(normalizedLines)
         val kind = if (isRune) ItemKind.RUNE else ItemKind.GEAR
         val slot = if (isRune) GearSlot.RUNE else detectGearSlot(fullLower)
         val tier = detectTier(fullLower)
@@ -83,10 +89,10 @@ object EhtOcrParser {
         )
     }
 
-    private fun detectIsRune(lines: List<String>, fullLower: String): Boolean {
-        if (fullLower.contains("rune")) return true
-        val firstFew = lines.take(3).joinToString(" ").lowercase()
-        return firstFew.contains("stone") && !firstFew.contains("weapon")
+    private fun detectIsRune(lines: List<String>): Boolean {
+        val header = lines.take(3).map { it.lowercase() }
+        return header.any { "rune" in it && "slot" !in it && "%" !in it } ||
+            header.any { "stone" in it && "weapon" !in it }
     }
 
     private fun detectGearSlot(fullLower: String): GearSlot {
@@ -157,79 +163,87 @@ object EhtOcrParser {
             val line = rawLine
                 .replace("O%", "0%")
                 .replace("o%", "0%")
+                .replace('−', '-')
+                .replace('–', '-')
+                .replace('—', '-')
+                .replace(Regex("""([+-])\s+(?=\d)"""), "$1")
                 .replace(",", ".")
             val lower = line.lowercase()
 
+            val damageTakenChance = damageTakenChanceRegex.find(line)
             when {
+                damageTakenChance != null -> {
+                    val chance = damageTakenChance.groupValues[1].toFloatOrNull() ?: continue
+                    if (chance in 0f..100f) map = map.copy(dmgReduction = map.dmgReduction + chance)
+                }
                 lower.containsAny("atk spd", "attack spd", "atk speed", "attack speed", "aspd") -> {
                     val v = extractAspdValue(line)
-                    if (v > 0f) map = map.copy(atkSpd = maxOf(map.atkSpd, v))
+                    if (v != 0f) map = map.copy(atkSpd = map.atkSpd + v)
                 }
                 lower.containsAny("crit dmg", "critical dmg", "crit damage", "critical damage", "cri dmg") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(critDmg = maxOf(map.critDmg, v))
+                    if (v != 0f) map = map.copy(critDmg = map.critDmg + v)
                 }
                 lower.containsAny("crit chance", "crit rate", "critical chance", "critical rate", "critical hit", "crit hit", "cri chance") -> {
                     val v = extractPercentValue(line, maxCap = 60f)
-                    if (v > 0f) map = map.copy(critChance = maxOf(map.critChance, v))
+                    if (v != 0f) map = map.copy(critChance = map.critChance + v)
                 }
                 lower.containsAny("evasion", "dodge", "eva ") || lower.startsWith("eva") -> {
                     val v = extractPercentValue(line, maxCap = 50f)
-                    if (v > 0f) map = map.copy(evasion = maxOf(map.evasion, v))
+                    if (v != 0f) map = map.copy(evasion = map.evasion + v)
                 }
                 lower.containsAny("dmg reduction", "damage reduction", "dmg taken", "damage taken", "dmg red") -> {
-                    val v = extractPercentValue(line, maxCap = 60f)
-                    if (v > 0f) map = map.copy(dmgReduction = maxOf(map.dmgReduction, v))
+                    // A different mitigation mechanic cannot be represented as a chance to reduce damage by 25%.
                 }
                 lower.containsAny("lifesteal", "life steal", "hp absorb", "drain", "leech") -> {
                     val v = extractPercentValue(line, maxCap = 40f)
-                    if (v > 0f) map = map.copy(lifesteal = maxOf(map.lifesteal, v))
+                    if (v != 0f) map = map.copy(lifesteal = map.lifesteal + v)
                 }
                 lower.containsAny("ignore def", "ignore defense", "def penetration", "penetration") -> {
                     val v = extractPercentValue(line, maxCap = 60f)
-                    if (v > 0f) map = map.copy(ignoreDef = maxOf(map.ignoreDef, v))
+                    if (v != 0f) map = map.copy(ignoreDef = map.ignoreDef + v)
                 }
-                lower.containsAny("boss dmg", "boss damage", "dmg to boss") -> {
+                lower.containsAny("boss dmg", "boss damage", "boss type", "dmg to boss") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(bossDmg = maxOf(map.bossDmg, v))
+                    if (v != 0f) map = map.copy(bossDmg = map.bossDmg + v)
                 }
-                lower.containsAny("demon dmg", "demon damage", "dmg to demon", "vs demon") -> {
+                lower.containsAny("demon dmg", "demon damage", "demon type", "dmg to demon", "vs demon") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(demonDmg = maxOf(map.demonDmg, v))
+                    if (v != 0f) map = map.copy(demonDmg = map.demonDmg + v)
                 }
-                lower.containsAny("primate dmg", "primate damage", "dmg to primate", "vs primate") -> {
+                lower.containsAny("primate dmg", "primate damage", "primate type", "dmg to primate", "vs primate") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(primateDmg = maxOf(map.primateDmg, v))
+                    if (v != 0f) map = map.copy(primateDmg = map.primateDmg + v)
                 }
-                lower.containsAny("animal dmg", "animal damage", "dmg to animal", "vs animal") -> {
+                lower.containsAny("animal dmg", "animal damage", "animal type", "dmg to animal", "vs animal") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(animalDmg = maxOf(map.animalDmg, v))
+                    if (v != 0f) map = map.copy(animalDmg = map.animalDmg + v)
                 }
-                lower.containsAny("undead dmg", "undead damage", "dmg to undead", "vs undead") -> {
+                lower.containsAny("undead dmg", "undead damage", "undead type", "dmg to undead", "vs undead") -> {
                     val v = extractPercentValue(line, maxCap = 120f)
-                    if (v > 0f) map = map.copy(undeadDmg = maxOf(map.undeadDmg, v))
+                    if (v != 0f) map = map.copy(undeadDmg = map.undeadDmg + v)
                 }
                 lower.containsAny("cast", "skill cooldown", "cooldown") -> {
                     val v = extractPercentValue(line, maxCap = 45f)
-                    if (v > 0f) map = map.copy(skillCast = maxOf(map.skillCast, v))
+                    if (v != 0f) map = map.copy(skillCast = map.skillCast + v)
                 }
                 lower.containsAny("move spd", "move speed", "movement speed", "mv spd") -> {
                     val v = extractPercentValue(line, maxCap = 60f)
-                    if (v > 0f) map = map.copy(moveSpd = maxOf(map.moveSpd, v))
+                    if (v != 0f) map = map.copy(moveSpd = map.moveSpd + v)
                 }
                 lower.containsAny("defense", "def ") || lower.startsWith("def") -> {
                     if (!lower.contains("ignore")) {
                         val v = extractPercentValue(line, maxCap = 80f)
-                        if (v > 0f) map = map.copy(defPct = maxOf(map.defPct, v))
+                        if (v != 0f) map = map.copy(defPct = map.defPct + v)
                     }
                 }
                 lower.containsAny("max hp", "hp +", "hp%", "health") -> {
                     val v = extractPercentValue(line, maxCap = 80f)
-                    if (v > 0f) map = map.copy(hpPct = maxOf(map.hpPct, v))
+                    if (v != 0f) map = map.copy(hpPct = map.hpPct + v)
                 }
                 lower.containsAny("attack", "atk") -> {
                     val v = extractPercentValue(line, maxCap = 90f)
-                    if (v > 0f) map = map.copy(atkPct = maxOf(map.atkPct, v))
+                    if (v != 0f) map = map.copy(atkPct = map.atkPct + v)
                 }
             }
         }
@@ -241,7 +255,7 @@ object EhtOcrParser {
         for (m in matches.asReversed()) {
             val raw = m.groupValues[1].replace(",", ".").toFloatOrNull() ?: continue
             val mag = abs(raw)
-            if (mag in 0.5f..maxCap) return mag
+            if (mag in 0.5f..maxCap) return signedValue(raw, line)
         }
         return 0f
     }
@@ -254,14 +268,17 @@ object EhtOcrParser {
             val mag = abs(raw)
             if (isPercent && mag in 1f..30f) {
                 // Convert EHT percentage attack speed into flat 0.25-scale equivalent
-                return (mag / 100f).coerceIn(0.01f, 0.25f)
+                return signedValue(raw, line) / 100f
             }
             if (!isPercent && mag in 0.01f..0.30f) {
-                return mag
+                return signedValue(raw, line)
             }
         }
         return 0f
     }
+
+    private fun signedValue(value: Float, line: String): Float =
+        if (decreaseRegex.containsMatchIn(line.lowercase())) -abs(value) else value
 
     private fun computeConfidence(statCount: Int, hasStrongKeyword: Boolean, name: String): Float {
         var score = 0.40f

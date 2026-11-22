@@ -73,9 +73,6 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedVaultBuildId = MutableStateFlow<Long?>(null)
     val selectedVaultBuildId: StateFlow<Long?> = _selectedVaultBuildId.asStateFlow()
 
-    private val _excludeOtherEquipped = MutableStateFlow(true)
-    val excludeOtherEquipped: StateFlow<Boolean> = _excludeOtherEquipped.asStateFlow()
-
     private val _compareItemAId = MutableStateFlow<Long?>(null)
     val compareItemAId: StateFlow<Long?> = _compareItemAId.asStateFlow()
 
@@ -101,15 +98,13 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val optimizedLoadout: StateFlow<OptimizedLoadoutResult?> = combine(
         selectedHero,
         customBuilds,
-        vaultItems,
-        _excludeOtherEquipped
-    ) { hero, builds, items, excludeOthers ->
+        vaultItems
+    ) { hero, builds, items ->
         hero?.let {
             val assigned = it.assignedBuildId?.let { bid -> builds.firstOrNull { b -> b.id == bid } }
             CommunityMinMaxEngine.optimizeLoadout(
                 hero = it,
                 allItems = items,
-                ignoreItemsEquippedByOtherHeroes = excludeOthers,
                 assignedBuild = assigned
             )
         }
@@ -313,10 +308,6 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
         _selectedHeroId.value = heroId
     }
 
-    fun setExcludeOtherEquipped(exclude: Boolean) {
-        _excludeOtherEquipped.value = exclude
-    }
-
     fun saveHero(hero: HeroProfile) {
         viewModelScope.launch {
             val id = repository.saveHero(hero)
@@ -357,46 +348,29 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     fun decodeBuildCode(code: String): Result<CustomBuild> = BuildCodeCodec.decode(code)
 
     fun equipRecommendedLoadout(result: OptimizedLoadoutResult) {
-        viewModelScope.launch {
-            val gearIds = result.slotRecommendations.mapNotNull { it.bestItem?.id }
-            val runeIds = result.runeRecommendations.map { it.rune.id }
-            val allIds = (gearIds + runeIds).distinct()
-            repository.equipLoadoutToHero(result.hero.id, allIds)
-            _statusBanner.value = "Equipped ${allIds.size} items/runes to ${result.hero.name}."
-        }
+        markGearChangesApplied(CommunityMinMaxEngine.gearChangesFor(result))
     }
 
     fun applySingleGearChange(change: GearChangeAction) {
-        viewModelScope.launch {
-            repository.applySingleGearChange(
-                heroId = change.heroId,
-                newItemId = change.suggestedItem.id,
-                replacedItemId = change.currentItem?.id
-            )
-            _statusBanner.value = "Marked ${change.slotLabel} change done for ${change.heroName}."
-        }
+        markGearChangesApplied(listOf(change))
     }
 
     fun applyAllChangesForHero(group: HeroChangeGroup) {
-        viewModelScope.launch {
-            val gearIds = group.recommendedLoadout.slotRecommendations.mapNotNull { it.bestItem?.id }
-            val runeIds = group.recommendedLoadout.runeRecommendations.map { it.rune.id }
-            val allIds = (gearIds + runeIds).distinct()
-            repository.equipLoadoutToHero(group.hero.id, allIds)
-            _statusBanner.value = "Applied all ${group.changes.size} swap(s) for ${group.hero.name}."
-        }
+        markGearChangesApplied(group.changes)
     }
 
     fun applyAllRosterGearChanges(plan: RosterChangePlan) {
-        if (plan.totalChangesCount == 0) return
+        markGearChangesApplied(plan.heroGroups.flatMap { it.changes })
+    }
+
+    private fun markGearChangesApplied(changes: List<GearChangeAction>) {
+        if (changes.isEmpty()) return
         viewModelScope.launch {
-            val loadouts = plan.heroGroups.map { group ->
-                val gearIds = group.recommendedLoadout.slotRecommendations.mapNotNull { it.bestItem?.id }
-                val runeIds = group.recommendedLoadout.runeRecommendations.map { it.rune.id }
-                group.hero.id to (gearIds + runeIds).distinct()
+            _statusBanner.value = if (repository.applyGearChanges(changes)) {
+                "Marked ${changes.size} confirmed gear change(s)."
+            } else {
+                "The Vault changed. Review the refreshed swaps before confirming again."
             }
-            repository.applyAllRosterLoadouts(loadouts)
-            _statusBanner.value = "Marked all ${plan.totalChangesCount} gear change(s) applied across ${plan.heroGroups.size} hero(es)."
         }
     }
 

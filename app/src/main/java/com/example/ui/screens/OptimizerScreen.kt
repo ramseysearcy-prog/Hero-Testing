@@ -117,7 +117,6 @@ fun OptimizerScreen(
     customBuilds: List<CustomBuild>,
     optimizedLoadout: OptimizedLoadoutResult?,
     rosterSummary: List<OptimizedLoadoutResult>,
-    excludeOtherEquipped: Boolean,
     vaultCount: Int,
     onSelectHero: (Long) -> Unit,
     onSaveHero: (HeroProfile) -> Unit,
@@ -127,7 +126,6 @@ fun OptimizerScreen(
     onDeleteBuild: (Long) -> Unit,
     onExportBuildCode: (CustomBuild) -> String,
     onDecodeBuildCode: (String) -> Result<CustomBuild>,
-    onSetExcludeOtherEquipped: (Boolean) -> Unit,
     onEquipLoadout: (OptimizedLoadoutResult) -> Unit,
     onUpdateAllHunters: () -> Unit,
     modifier: Modifier = Modifier
@@ -463,24 +461,16 @@ fun OptimizerScreen(
                                         }
                                     }
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text("Respect Equipped Gear Lock", style = MaterialTheme.typography.titleSmall, color = ForgeTextPrimary)
-                                            Text("Skip items equipped by other hunters", style = MaterialTheme.typography.bodySmall, color = ForgeTextSecondary)
-                                        }
-                                        Switch(
-                                            checked = excludeOtherEquipped,
-                                            onCheckedChange = onSetExcludeOtherEquipped
-                                        )
-                                    }
-
+                                    Text(
+                                        "Confirm only after equipping in-game. Replaced gear is removed from the Vault.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ForgeTextSecondary
+                                    )
                                     Button(
                                         onClick = { onEquipLoadout(optimizedLoadout) },
-                                        enabled = vaultCount > 0,
+                                        enabled = optimizedLoadout.slotRecommendations.any {
+                                            it.bestItem != null && it.bestItem.id != it.currentItem?.id
+                                        },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = ForgeEmerald,
                                             contentColor = ForgeObsidian
@@ -492,7 +482,7 @@ fun OptimizerScreen(
                                     ) {
                                         Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(8.dp))
-                                        Text("Equip Recommended Loadout (${optimizedLoadout.combatScore.roundToInt()} pts)", fontWeight = FontWeight.Bold)
+                                        Text("Mark Gear Swaps Equipped", fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -632,66 +622,6 @@ fun OptimizerScreen(
                                             text = rec.rationale,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = ForgeTextSecondary
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Recommended Runes
-                        item {
-                            Text(
-                                text = "Optimal Rune Combination (${optimizedLoadout.runeRecommendations.size}/${selectedHero.runeSlots})",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = ForgeTextPrimary
-                            )
-                        }
-
-                        if (optimizedLoadout.runeRecommendations.isEmpty()) {
-                            item {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = ForgeSlateDark,
-                                    border = BorderStroke(1.dp, ForgeBorder)
-                                ) {
-                                    Text(
-                                        text = "No Runes available in Vault. Scan or log Runes so the optimizer can fill missing ASPD/Crit caps and stack Crit DMG!",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = ForgeTextSecondary,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(14.dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            items(optimizedLoadout.runeRecommendations, key = { "rune_${it.slotIndex}_${it.rune.id}" }) { runeRec ->
-                                Card(
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(containerColor = ForgeSlateDark),
-                                    border = BorderStroke(1.dp, ArcaneCyan.copy(alpha = 0.5f))
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "RUNE SLOT #${runeRec.slotIndex} • ${runeRec.rune.name}",
-                                                style = MaterialTheme.typography.titleSmall,
-                                                color = ForgeTextPrimary
-                                            )
-                                            TierBadge(runeRec.rune.tier)
-                                        }
-                                        StatPillsRow(runeRec.rune.stats)
-                                        Text(
-                                            text = runeRec.rationale,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = ArcaneCyan
                                         )
                                     }
                                 }

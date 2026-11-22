@@ -30,14 +30,8 @@ interface VaultDao {
     @Query("UPDATE vault_items SET equippedHeroId = NULL WHERE equippedHeroId = :heroId")
     suspend fun unequipHeroItems(heroId: Long)
 
-    @Query("UPDATE vault_items SET equippedHeroId = NULL WHERE id = :itemId")
-    suspend fun clearEquippedItemById(itemId: Long)
-
     @Query("UPDATE vault_items SET equippedHeroId = :heroId WHERE id = :itemId")
     suspend fun setItemEquippedHero(itemId: Long, heroId: Long)
-
-    @Query("UPDATE vault_items SET equippedHeroId = :heroId WHERE id IN (:itemIds)")
-    suspend fun equipItemsToHero(heroId: Long, itemIds: List<Long>)
 }
 
 @Dao
